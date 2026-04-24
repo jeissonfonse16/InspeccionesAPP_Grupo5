@@ -32,12 +32,17 @@ if os.path.exists(STATIC_DIR):
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 # Initialize database immediately for Serverless
-init_db()
-db_init = SessionLocal()
 try:
-    cargar_datos_iniciales(db_init)
-finally:
-    db_init.close()
+    init_db()
+    db_init = SessionLocal()
+    try:
+        cargar_datos_iniciales(db_init)
+    finally:
+        db_init.close()
+    print("Base de datos inicializada correctamente.")
+except Exception as e:
+    print(f"CRITICAL ERROR al inicializar la BD: {e}")
+    # We continue so the app at least boots up and shows the UI
 
 # ═══════════════════════════════════════
 # PYDANTIC MODELS
