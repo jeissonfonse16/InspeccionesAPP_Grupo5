@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from database import init_db, SessionLocal, get_db, cargar_datos_iniciales, get_rotacion_turnos
+from database import init_db, get_db, cargar_datos_iniciales, get_rotacion_turnos
 from models import Tecnico, OrdenTrabajo, Asignacion
 from scheduler import generar_plan, reprogramar, liberar_tecnico
 from indicadores import calcular_indicadores
@@ -24,25 +24,20 @@ from indicadores import calcular_indicadores
 
 app = FastAPI(title="Inspecciones Predictivas", version="1.0.0")
 
-# Static files mount - Optional for Vercel compatibility
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-STATIC_DIR = os.path.join(BASE_DIR, "static")
+STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-if os.path.exists(STATIC_DIR):
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-
-# Initialize database immediately for Serverless
-try:
+# Initialize database on startup
+@app.on_event("startup")
+def startup():
     init_db()
-    db_init = SessionLocal()
+    # Auto-load data if tables are empty
+    db = next(get_db())
     try:
-        cargar_datos_iniciales(db_init)
+        cargar_datos_iniciales(db)
     finally:
-        db_init.close()
-    print("Base de datos inicializada correctamente.")
-except Exception as e:
-    print(f"CRITICAL ERROR al inicializar la BD: {e}")
-    # We continue so the app at least boots up and shows the UI
+        db.close()
+
 
 # ═══════════════════════════════════════
 # PYDANTIC MODELS
@@ -72,6 +67,7 @@ class AusenciaRequest(BaseModel):
     fecha_inicio: str = ""
     fecha_fin: str = ""
 
+
 # ═══════════════════════════════════════
 # ENDPOINTS
 # ═══════════════════════════════════════
@@ -79,11 +75,8 @@ class AusenciaRequest(BaseModel):
 @app.get("/")
 async def root():
     """Serve the main dashboard."""
-    index_path = os.path.join(STATIC_DIR, "index.html")
-    if not os.path.exists(index_path):
-        # Fallback for some Vercel configurations
-        index_path = "static/index.html"
-    return FileResponse(index_path)
+    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+
 
 @app.post("/api/inicializar")
 def inicializar(db: Session = Depends(get_db)):
@@ -91,11 +84,13 @@ def inicializar(db: Session = Depends(get_db)):
     resumen = cargar_datos_iniciales(db)
     return resumen
 
+
 @app.get("/api/grupos")
 def listar_grupos(db: Session = Depends(get_db)):
     """List all available groups."""
     grupos = db.query(Tecnico.grupo).distinct().all()
     return sorted([g[0] for g in grupos])
+
 
 @app.get("/api/tecnicos")
 def listar_tecnicos(grupo: str = Query(None), db: Session = Depends(get_db)):
@@ -113,6 +108,7 @@ def listar_tecnicos(grupo: str = Query(None), db: Session = Depends(get_db)):
         }
         for t in tecnicos
     ]
+
 
 @app.get("/api/ordenes")
 def listar_ordenes(
@@ -179,11 +175,13 @@ def listar_ordenes(
 
     return {"total": total, "page": page, "per_page": per_page, "ordenes": result}
 
+
 @app.post("/api/generar-plan")
 def api_generar_plan(req: GenerarPlanRequest, db: Session = Depends(get_db)):
     """Generate a weekly schedule plan."""
     resultado = generar_plan(db, req.grupo, req.fecha_inicio, req.fecha_fin)
     return resultado
+
 
 @app.get("/api/plan-semanal")
 def plan_semanal(
@@ -260,6 +258,7 @@ def plan_semanal(
         "tecnicos": plan,
     }
 
+
 @app.put("/api/actualizar-estado")
 def actualizar_estado(req: ActualizarEstadoRequest, db: Session = Depends(get_db)):
     """Update OT status. If 'no_ejecutada', also update the assignment."""
@@ -281,6 +280,7 @@ def actualizar_estado(req: ActualizarEstadoRequest, db: Session = Depends(get_db
     db.commit()
 
     return {"ot_id": req.ot_id, "estado": req.estado, "updated": True}
+
 
 @app.post("/api/nueva-ot")
 def nueva_ot(req: NuevaOTRequest, db: Session = Depends(get_db)):
@@ -316,6 +316,7 @@ def nueva_ot(req: NuevaOTRequest, db: Session = Depends(get_db)):
 
     return {"ot_id": new_id, "estado": "pendiente", "created": True}
 
+
 @app.post("/api/ausencia-tecnico")
 def ausencia_tecnico(req: AusenciaRequest, db: Session = Depends(get_db)):
     """Handle technician absence: free their OTs and reschedule."""
@@ -329,6 +330,7 @@ def ausencia_tecnico(req: AusenciaRequest, db: Session = Depends(get_db)):
     )
     return resultado
 
+
 @app.get("/api/indicadores")
 def api_indicadores(
     grupo: str = Query(None),
@@ -339,6 +341,7 @@ def api_indicadores(
     """Get KPIs for the dashboard."""
     return calcular_indicadores(db, grupo, fecha_inicio, fecha_fin)
 
+
 @app.delete("/api/reset")
 def reset_data(db: Session = Depends(get_db)):
     """Reset all assignments and set all OTs back to 'pendiente' (for testing)."""
@@ -346,6 +349,7 @@ def reset_data(db: Session = Depends(get_db)):
     db.query(OrdenTrabajo).update({OrdenTrabajo.estado: "pendiente"})
     db.commit()
     return {"reset": True, "message": "All assignments deleted, OTs set to pendiente"}
+
 
 @app.get("/api/rotacion")
 def get_rotacion(grupo: str = Query(None)):
