@@ -1,7 +1,5 @@
 fastapi
 uvicorn
 sqlalchemy
-pandas
-openpyxl
 python-multipart
 aiofiles
